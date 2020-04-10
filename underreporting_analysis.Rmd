@@ -1,0 +1,436 @@
+---
+title: "Estimating Number of COVID-19 cases in Brazil based on SARS hospitalizations"
+author: ""
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r loadings, include=FALSE}
+## libraries 
+library(dplyr) # for general stuff
+library(sf) # for spatial objects
+library(ggplot2) # for plotting
+library(cowplot) # for plotting
+library(ggspatial) # functionalities for map plots
+theme_set(theme_bw()) 
+library(brazilmaps) # to get brazilian map
+library(rnaturalearth) # to get world map
+
+## loading data
+covid <- read.csv("Data/brazil_covid19.csv", encoding = "UTF-8") # daily covid data
+sars <- read.csv("Data/SARS.csv", encoding = "UTF-8") # weekly sars hospitalization
+flu <- read.csv("Data/SARSFLU.csv", encoding = "UTF-8") # weekly sars hosp. due to flue
+```
+
+# Goals, Data, Methods and model estimation {.tabset .tabset-fade}
+
+## Goals
+
+Goals:
+
+- Estimate the number of severe COVID-19 cases in Brazil using data on the number of hospitalizations due to Severe Acute Respiratory Syndrom (SARS);
+- Estimate the proportion of underreported cases of COVID-19;
+- Also do it disaggregated by states.
+
+## Data Used
+
+Data Used:
+
+- COVID: Number of confirmed COVID-19 cases in Brazil (frequency = daily);
+- SARS: Number of hospitalizations due to SARS (frequency = weekly);
+- Flu: Number of hospitalized SARS cases that developed from a flu (frequency = weekly).
+
+## Methodology
+
+Let SARS* be the number of hospitalizations due to SARS that are NOT developed from a flu.
+
+- Fit a model to SARS* using data from 2010 to 2019;
+- Use this model to predict the number of SARS* in 2020;
+- The realization of the SARS* series in 2020 minus the predicted SARS* number is said to be the number of SARS* hospitalizations due to COVID-19.
+
+
+## COVID-19 testing in Brazil
+
+COVID-19 testing in Brazil:
+
+- Authorities are advising only those that develop serious symptoms (respiratory problems) to seek health professionals;
+- Thus, cases of COVID-19 that are light are not tested - only those who develop to repiratory syndrom;
+- But even with this reduced population (cases that develop respiratory syndrom) that MAY BE tested, there's reason to believe that cases from this population are actually higher!
+
+
+# Data Preparation and Data Visualization
+Daily COVID-19 data will be aggregated by week. Week aggregation follows the same epidemological week of SARS data, and is as follow, for 2020:
+
+```{r epidemic_week}
+
+epidemic_week <- data.frame(week = 1, from = as.Date("2019-12-29"), 
+                            to = as.Date("2020-01-04"))
+for (i in 1:52){
+        epidemic_week[i+1,] <- epidemic_week[i,] + c(1,7,7)
+}
+print(epidemic_week[1:13,])
+
+```
+
+
+The code below aggregates COVID-19 by week, create useful transformations and merge it with other data used.
+```{r aggr covid}
+# creating a data.frame (dfc) that also contains Brazil number of cases
+agg <- covid %>% group_by(date) %>% summarise(cases = sum(cases), deaths = sum(deaths))
+agg$region = "Brasil"
+agg$state = "Brasil"
+dfc <- rbind(covid, agg)
+names(dfc)[3] <- "UF"
+rm(agg)
+# aggregating covid data by epidemic week
+dfc$date <- as.Date(dfc$date)
+UFs <- levels(as.factor(dfc$UF))
+covid <- data.frame(UF = NA, year = NA, week = NA, cases = NA, deaths = NA)
+for(UF in UFs){
+        data <- dfc[dfc$UF == UF,]
+        data <- data[data$date %in% epidemic_week$to,]
+        first_week <- epidemic_week$week[epidemic_week$to == data$date[1]]
+        last_week <- epidemic_week$week[epidemic_week$to == data$date[nrow(data)]]
+        data$week <- first_week:last_week
+        data$year <- 2020
+        data <- data[,-which(names(data) %in% c("region", "date")) ]
+        covid <- rbind(covid, data)
+        
+}
+covid <- covid[-1,]
+rownames(covid) <- NULL
+
+# merging with SARS data
+sars <- sars[,-1]; flu <- flu[,-1]
+names(sars)[c(2,3,6,7)] <- c("status_sars", "n_sars", "min_sars", "max_sars")
+names(flu)[c(2,3,6,7)] <- c("status_flu", "n_flu", "min_flu", "max_flu")
+dff <- merge(sars, covid, all.x = T, by = c("year", "week", "UF"))
+dff <- merge(dff, flu, all.x = T, all.y = T, by = c("year", "week", "UF"))
+dff <- dff[order(dff$year, dff$week),]
+dff$n <- dff$n_sars - dff$n_flu
+dff$max <- dff$max_sars - dff$max_flu
+dff$min <- dff$min_sars - dff$min_flu
+dff$cases <- ifelse(is.na(dff$cases), 0, dff$cases)
+rm(sars, flu, covid, dfc, data, epidemic_week)
+``` 
+
+Below we visualize the COVID-19 aggregated by week, and also the number of SARS* hospitalizations -- that is, number of SARS hospitalizations not diagnosed as flu. Recent data on these numbers (SARS) is not as consistent, but an interval with a upperbound and a lowerbound is avaliable. This affects mainly the last couple of weeks of 2020 (probably underestimating it):
+
+```{r plot covid}
+br2020 <- dff$UF == "Brasil" & dff$year == 2020
+plot(dff$max[br2020], lty = 2, type = 'l', col = 'blue', 
+     xlab = "Week of 2020", ylab = "Number of cases", main = "COVID-19 confirmed cases and SARS* hospitalizations in Brazil")
+lines(dff$cases[br2020])
+lines(dff$min[br2020], lty = 2, col = 'blue')
+lines(dff$n[br2020], col = "blue")
+legend(x = 2, y = 8000, legend = c("COVID","SARS*","SARS* bounds"), col = c("black", rep("blue",2)),
+       lty = c(1,1,2))
+```
+
+We can also visualize the total number of SARS hospitalizarions and the number of SARS that are diagnosed as flu:
+
+``` {r plot sars}
+br2010 <- dff$UF == "Brasil" & dff$year >= 2010
+xxx <- seq(2010, 2020+12/52, 1/52)
+plot(x = xxx, y = dff$n_sars[br2010], type = 'l', xlab = "",
+     ylab = "Number of cases", main = "SARS hospitalizations - Total and diagnosed with Flu")
+lines(x = xxx, y = dff$n_flu[br2010], col = 'blue')
+for (i in seq(1, nrow(dff[br2010,]), 52)){
+        abline(v=xxx[i], col="gray", lty = 2, lwd = 2)
+}
+legend(x = 2010.2, y = 5000, legend = c("SARS", "Flu"), col = c("black", "blue"), lty = 1)
+```
+
+It is also interesting to see which states have more SARS* and Flu per inhabitants. The maps below shows the sum of all cases divided by the 2019 population estimative for each state.
+
+```{r sars map}
+
+# brazilian map as sf
+shp <- get_brmap(geo = "State")
+names(shp)[1] <- "UF"
+
+# adding variables to shp
+tmp <- dff %>% group_by(UF) %>% summarise(n = mean(n), flu = mean(n_flu))
+tmp$UF <- toupper(tmp$UF)
+shp <- merge(shp, tmp, by = "UF")
+
+# world map as sf
+world <- ne_countries(scale='medium',returnclass = 'sf')
+
+# brazilian population in 2019 (estimated)
+pop <- read.csv("Data/brazil_population.csv", encoding = "UTF-8")
+pop$UF <- toupper(pop$UF)
+shp <- merge(shp, pop, by = "UF")
+rm(pop, tmp)
+
+# plotting maps with ggplot
+(flumap <- ggplot(data = world) +
+        geom_sf() +
+        geom_sf(aes(fill = flu/POP), data = shp)  +
+        scale_fill_gradient(low = "white", high = "firebrick")+
+        coord_sf(xlim = c(-80, -33), ylim = c(-35, 7), expand = FALSE)+
+        theme(axis.title.x = element_blank(), 
+              axis.title.y = element_blank(), 
+              panel.background = element_rect(fill = "azure"), 
+              panel.border = element_rect(fill = NA))+
+        annotation_north_arrow(location = "bl", which_north = "true", 
+                               pad_x = unit(0.1, "in"), pad_y = unit(0.3, "in"),
+                               style = north_arrow_fancy_orienteering)+
+        labs(fill = "Flu/POP")
+)
+
+
+(sarsmap <- ggplot(data = world) +
+        geom_sf() +
+        geom_sf(aes(fill = n/POP), data = shp)  +
+        scale_fill_gradient(low = "white", high = "firebrick")+
+        coord_sf(xlim = c(-80, -33), ylim = c(-35, 7), expand = FALSE)+
+        theme(axis.title.x = element_blank(), 
+              axis.title.y = element_blank(), 
+              panel.background = element_rect(fill = "azure"), 
+              panel.border = element_rect(fill = NA))+
+        annotation_north_arrow(location = "bl", which_north = "true", 
+                               pad_x = unit(0.1, "in"), pad_y = unit(0.3, "in"),
+                               style = north_arrow_fancy_orienteering)+
+        labs(fill = "SARS*/POP")
+)
+
+```
+
+
+# Model Especification and Estimation
+Let $SARS^*_t$ be the number of hospitalizations due to SARS with no flu diagnostic in period of time $t$. We assume $SARS^*_t$ follows a Poisson distribution, and model the intesity with long-link, using as covariates a linear time trend, a week seasonal component ($s_t$) and the number of flu cases $Flu_t$:
+
+$$ SARS^*_t \sim Poisson(\lambda_t) $$
+$$log(\lambda_t) = \delta t + s_t + \beta Flu_t$$
+
+Estimation is done using weekly data from jan 2010 to dec 2019. It is also done considering all cases in Brazil, and disaggregated by state (a total of 28 models). The fitted and predicted values are stored in the main data frame. The models are stored in a list.
+
+```{r model estimation}
+dff$fitted <- NA
+dff$predicted <- NA
+dff$dp95 <- NA
+glm_list <- list()
+starting_year <- 2010
+for (region in UFs){
+        sars <- dff[dff$UF == region & dff$year >= starting_year,]
+        sars <- sars[, which(names(sars) %in% c("year", "week", "n", "n_flu"))]
+        sars$t <- 1:nrow(sars)
+        # seasonality dummies (week)
+        week_dummy <- table(1:nrow(sars[sars$year < 2020,]), 
+                            as.factor(sars$week[sars$year < 2020]))
+        # eliminating year 2020, since this will be predicted by the model
+        sars_reg <- sars[sars$year < 2020,]
+        n = nrow(sars_reg)
+        # fit poisson
+        modp <- glm(n ~ -1 + t + week_dummy + n_flu, family = "poisson", data = sars_reg)
+        # get predicted values
+        position2020 <- (nrow(sars)-12):(nrow(sars))
+        predicted <- exp(modp$coefficients[2:14] + 
+                        modp$coefficients[1]*position2020 + 
+                        modp$coefficients[54]*dff$n_flu[dff$UF == region & dff$year == 2020])
+        # get abs(mean-95%interval)
+        t_value = qnorm(0.9750)
+        sdmod <- summary(modp)$coefficients[,2] %>% as.numeric()
+        dp95 <- exp((t_value*rep(sdmod[2:53], 20)[1:(n+length(position2020))]) + 
+                            (t_value*sdmod[1]*sars$t) + 
+                            (t_value*sdmod[54]*sars$n_flu))
+        # storing results
+        glm_list[[as.character(region)]] <- modp
+        dff[dff$UF == region & dff$year >= starting_year, 
+            which(names(dff) %in% c("fitted",  "predicted", "dp95"))] <- data.frame(
+                c(modp$fitted.values, rep(NA, length(position2020))), 
+                c(rep(NA, length(modp$fitted.values)), predicted),
+                dp95)
+}
+```
+
+# Results
+## Estimates for the number of COVID-19 severe cases in Brazil
+
+Below is plotted the actual SARS* series (black), the fitted values (blue) and the predicted values (red). The predicted values are assumed to be the number of cases of SARS* had the pandemic not happened.
+
+```{r SARS fit}
+from <- 2016
+xxx = seq(2016, 2020+12/52, 1/52)
+plot(x = xxx, dff$n[dff$UF == "Brasil" & dff$year >= from], type = 'l', xlab = "", ylab = "",
+     main = "SARS* - Actual, Fitted and Predicted")
+lines(x = xxx, dff$fitted[dff$UF == "Brasil" & dff$year >= from], col = 'blue', lty = 2)
+lines(x = xxx, dff$predicted[dff$UF == "Brasil" & dff$year >= from], col = 'red', lty = 2)
+for (i in seq(1, nrow(dff[dff$UF == "Brasil" & dff$year >= from,]), 52)){
+        abline(v=xxx[i], col="gray", lty = 2, lwd = 2)
+}
+legend(x = 2016.1, y = 5000, legend = c("SARS* Actual", "Fitted", "Predicted"), 
+       col = c("black", "blue", "red"), lty = c(1,2,2))
+
+```
+
+The estimated number of COVID-19 cases in Brazil is the actual number of SARS* minus the red line in the last plot. This estimate will be called $COVID^*$ We can see that this far exceeds the number of reported COVID-19 cases:
+```{r COVID estimates}
+br2020 <- dff$year == 2020 & dff$UF == "Brasil" 
+discount <- (dff$n[dff$UF == "Brasil"] - dff$fitted[dff$UF == "Brasil"]) %>%
+        abs() %>% mean(na.rm = T)
+covid_estimate <- data.frame(n = dff$n_sars[br2020] - dff$predicted[br2020] - discount, 
+                             max = dff$max_sars[br2020] - dff$predicted[br2020] - discount, 
+                             min = dff$min_sars[br2020] - dff$predicted[br2020] - discount)
+for (c in 1:ncol(covid_estimate)){
+        covid_estimate[,c] <- ifelse(covid_estimate[,c] <= 20, 0, as.integer(covid_estimate[,c]))
+        }
+plot(x = 1:nrow(covid_estimate), covid_estimate$max, col = 'blue', lty = 2, type = 'l',
+     xlab = "Week of 2020", ylab = "Number of cases", main = "COVID-19 estimates and confirmed cases")
+lines(x = 1:nrow(covid_estimate), covid_estimate$min, col = 'blue', lty = 2)
+lines(x = 1:nrow(covid_estimate), covid_estimate$n, col = 'blue')
+lines(dff$cases[br2020])
+legend(x = 1, y = 7000, legend = c("Confirmed COVID-19 cases", "Estimated COVID-19 cases",
+                                   "Bounds"), col = c("black", rep("blue", 2)), lty = c(1,1,2))
+
+
+```
+
+Now, if assumption 1 is correct, we can grasp how big is sub notification in Brazil. Let's just remember that we are only considering the severe COVID-19 cases, so the actual number of infected people is always higher (just to give an idea, if 20% of people that have the virus develop SARS, and the number of confirmed cases is N, than the number of actually infected people is N/0.2... but, it gets worse, since this work is saying that the confirmed cases number is already a sub notification of severe cases...).
+
+Let's define the sub notification ratio as 
+
+$$sub_t = \frac{COVID^*_t - COVID_t}{COVID^*_t}$$
+
+where $COVID^*_t$ is the estimated number of COVID-19 severe cases in period $t$, and $COVID_t$ is the number of confirmed cases in period $t$.
+
+The first week with confirmed case if week 9. Since the first weeks after week 9 have very little confirmed cases, any prediction error results in a huge difference in the subotification ratio. On the other side, the last weeks of available data are, as discussed earlier, unstable. I decided to only present here the subnotification ratio for weeks 12 and 13, considering as $COVID^*_t$ the difference between the prediction and the SARS reported, lower bound and upper bound numbers. 
+
+The graphic below shows the evolution of $sub_t$ over time. Upper and lower bounds are shows because the reported number of SARS hospitalizations is unstable in 2020, but have bounds.
+
+``` {r subnotifications}
+sub <- data.frame(week = 12:13, sub = rep(NA, 2), max = rep(NA, 2), min = rep(NA, 2))
+for (c in 1:ncol(covid_estimate)){
+        sub[,c+1] <- (covid_estimate[12:13, c] - dff$cases[br2020 & dff$week >=
+                                                                 12])/covid_estimate[12:13, c]
+}
+sub
+```
+
+This results indicates a big underreporting. This maybe because of the delay between hospitalizing the infected and getting a test result. If we lag $COVID_t$ by 1 week and plot with $COVID^*_t$, the series are closer
+
+```{r lagged COVID}
+plot(x = 1:nrow(covid_estimate), covid_estimate$max, col = 'blue', lty = 2, type = 'l',
+     xlab = "Week of 2020", ylab = "Number of cases", main = "COVID-19 estimates and confirmed cases")
+lines(x = 1:nrow(covid_estimate), covid_estimate$min, col = 'blue', lty = 2)
+lines(x = 1:nrow(covid_estimate), covid_estimate$n, col = 'blue')
+lines(dff$cases[br2020][2:length(dff$cases[br2020])])
+legend(x = 1, y = 7000, legend = c("Lag1 COVID-19 cases", "Estimated COVID-19 cases",
+                                   "Bounds"), col = c("black", rep("blue", 2)), lty = c(1,1,2))
+```
+
+## Disaggregated Results
+
+Below is a map with confirmed cases of COVID-19 divided by population for each state in Brazil. Also, a similar map shows the estimated COVID-19 number of cases by the model. It is noticible that Distrito Federal, the country capital, have a lot of confirmed cases, but the model estimates way less. This is because in Distrito Federal there's actually a lot of testing going on on politians, even tought theses cases don't develop to SARS.
+
+```{r disaggregated results}
+
+shp$sub <- NA; shp$subf <- NA; shp$cases_estimate <- NA; shp$cases <- NA
+
+K = 150 # treshold for number of cases to be included in the map
+for (state in levels(shp$UF)){
+        # cut df by state
+        df_uf <- dff[toupper(dff$UF) == state,]
+        # get week of first confirmed case
+        week1 <- min(df_uf$week[df_uf$cases > 0], na.rm = T)
+        # get estimates for SARS* and estimates for COVID
+        epidemic_t <- df_uf$week >= week1 & df_uf$year == 2020
+        df_uf_estimate <- df_uf$predicted[epidemic_t]
+        cases_estimate <- (df_uf$n[epidemic_t] - df_uf_estimate - 
+                mean(abs(df_uf$fitted - df_uf$n), na.rm = T)) %>% as.integer()
+        cases_estimate <- ifelse(cases_estimate < 0, 0, cases_estimate)
+        # get number of confirmed cases
+        confirmed_cases <- df_uf$cases[epidemic_t]
+        
+        # calculating underreporting
+        is_state <- tolower(shp$UF) == tolower(state)
+        sub <- ((cases_estimate-confirmed_cases)/cases_estimate) %>% mean()
+        shp$subf[is_state] <- sub
+        # getting only states with subnotification greater than K in week 13
+        if (df_uf$cases[df_uf$year == 2020 & df_uf$week == 13] > K){
+                shp$sub[is_state] <- ifelse(sub < 0, 0, sub)
+        }else{
+                shp$sub[is_state] <- NA
+        }
+        # other data for maps 
+        # week 13 cases and estimated cases
+        shp$cases_estimate[is_state] <- cases_estimate[length(cases_estimate)]
+        shp$cases[is_state] <- confirmed_cases[length(confirmed_cases)]
+}
+
+# make it discret will be better for the map
+shp$brks <- cut(shp$sub, c(seq(0,1,0.1), 3), include.lowest = TRUE)
+        
+(covidmap<- ggplot(data = world) +
+        geom_sf() +
+        geom_sf(aes(fill = cases/POP), data = shp)  +
+        scale_fill_gradient(low = "white", high = "firebrick", limits = 
+                                    c(0e+00, 6.3e-05))+
+        coord_sf(xlim = c(-80, -33), ylim = c(-35, 7), expand = FALSE)+
+        theme(axis.title.x = element_blank(), 
+              axis.title.y = element_blank(), 
+              panel.background = element_rect(fill = "azure"), 
+              panel.border = element_rect(fill = NA))+
+        annotation_scale(location = "bl", width_hint = 0.1) +
+        annotation_north_arrow(location = "bl", which_north = "true", 
+                               pad_x = unit(0.1, "in"), pad_y = unit(0.3, "in"),
+                               style = north_arrow_fancy_orienteering)
+)
+
+
+(covid_predictmap <- ggplot(data = world) +
+                geom_sf() +
+                geom_sf(aes(fill = cases_estimate/POP), data = shp)  +
+                scale_fill_gradient(low = "white", high = "firebrick")+
+                coord_sf(xlim = c(-80, -33), ylim = c(-35, 7), expand = FALSE)+
+                theme(axis.title.x = element_blank(), 
+                      axis.title.y = element_blank(), 
+                      panel.background = element_rect(fill = "azure"), 
+                      panel.border = element_rect(fill = NA))+
+                annotation_scale(location = "bl", width_hint = 0.1) +
+                annotation_north_arrow(location = "bl", which_north = "true", 
+                                       pad_x = unit(0.1, "in"), pad_y = unit(0.3, "in"),
+                                       style = north_arrow_fancy_orienteering)
+)
+
+``` 
+
+
+Finally, the map below shows the underreporting for states that have more than 150 cases in the 13th week of 2020. This underreporting is the following:
+
+$$sub_i = \frac{1}{T-t_0+1}\sum^T_{t_0}{\frac{COVID^*_{it} - COVID_{it}}{COVID^*_{it}}}$$
+
+where $i$ index states, $t$ index weeks of 2020, $t_0$ is the week which the first case of COVID-19 was confirmed in state $i$. As previous, $COVID*$ is the estimated number of cases and $COVID$ is the confirmed number.
+
+```{r underreporting by state}
+# underreporting map
+(subnot1 <- ggplot(data = world) +
+        geom_sf() +
+        geom_sf(aes(fill = brks), data = shp)  +
+        scale_fill_brewer(type = 'seq', palette = "Reds", na.value= "gray55") +
+        coord_sf(xlim = c(-80, -33), ylim = c(-35, 7), expand = FALSE)+
+        theme(axis.title.x = element_blank(), 
+              axis.title.y = element_blank(), 
+              panel.background = element_rect(fill = "azure"), 
+              panel.border = element_rect(fill = NA))+
+        annotation_scale(location = "bl", width_hint = 0.1) +
+        annotation_north_arrow(location = "bl", which_north = "true", 
+                               pad_x = unit(0.1, "in"), pad_y = unit(0.3, "in"),
+                               style = north_arrow_fancy_orienteering)+ 
+        labs(fill = "Underreporting Ratio") +
+        guides(fill = guide_legend(reverse = TRUE))
+)
+
+``` 
+
+# Brief overview and limitations discussion
+
+- We estimated the number of COVID-19 severe cases and used it to address the rate of sub notification (underreporting);
+- We assume that all confirmed cases of COVID-19 in Brazil are severe. Altough most of them are, not ALL are. This makes our sub notification estimative be lower than the real sub notification;
+- We used a relatively simple model for the number of SARS hospitalizarions. A better model may be found;
+- Actual number of SARS hospitalizations is unstable for recent weeks, but bounds are available;
+- It appears that the number of confirmed cases are at least 1 week lagged in comparison to the estimates. But the estimates are also behind the real number of infected people that develop SARS, since it takes some time from contracting the coronavirus and presenting theses severe symptons.
+
