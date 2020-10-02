@@ -4,7 +4,7 @@
     <p align="center" style="font-size: 12px">Estimated COVID-19 underreporting</p>
 </p>
 
-## About
+## What is this project about?
 The goal of this project is to estimate the number of COVID-19 cases underreported by the Brazilian Federal Government. To do this, a prediction of the number of COVID-19 seveare cases is made using hospitalization data. The project consisted of the following steps:
 
 - Collect hospitalization data;
@@ -15,6 +15,8 @@ The goal of this project is to estimate the number of COVID-19 cases underreport
 - Python (pyautogui, time, pandas)
 - R (dplyr, sf, ggplor2, cowplot, ggspatial)
 
+
+## Brief Overview
 ### 1. Collecting data
 Hospitalization data was collected from [Fiocruz](http://info.gripe.fiocruz.br/), using Python library pyautogui. Data cosists of two main variables:
 - Number of hospitalizations due to Seveare Acute Respiratory Syndrom (SARS)
