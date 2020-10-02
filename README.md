@@ -35,7 +35,10 @@ This impact is also a crude estimative of the number of seveare COVID-19 cases, 
 The analysis was also made disagreggated by state. The results are summarised in my [Kaggle Notebook](https://www.kaggle.com/ianfukushima/estimate-covid-19-based-on-sars-hospitalizations), with the code used in the middle! Check it out.
 
 ## About me
+Github: [@isfuku](https://github.com/is-fuku)
+
+LinkedIn: [@ian-fukushima](https://linkedin.com/in/ian-fukushima)
+
 **Made with ❤️ by Ian Fukushima**
-* Github: [@isfuku](https://github.com/is-fuku)
-* LinkedIn: [@ian-fukushima](https://linkedin.com/in/ian-fukushima)
+
 
